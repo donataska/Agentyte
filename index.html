@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>OpenClaw Kanban</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;padding:16px;background:#f5f7fb}
+    h1{margin:0 0 12px}
+    .board{display:flex;gap:12px}
+    .col{background:#fff;border-radius:8px;padding:12px;flex:1;min-height:300px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
+    .col h2{font-size:16px;margin:0 0 8px}
+    .task{background:#f7f9fc;border-radius:6px;padding:8px;margin-bottom:8px;cursor:grab}
+    .task.dragging{opacity:.6}
+    .toolbar{margin:12px 0;display:flex;gap:8px}
+    .btn{padding:8px 12px;background:#2b6cb0;color:#fff;border-radius:6px;border:none;cursor:pointer}
+    .btn.secondary{background:#edf2ff;color:#1a202c}
+    .small{font-size:13px;padding:6px 8px}
+    textarea{width:100%;box-sizing:border-box}
+    .meta{font-size:12px;color:#666;margin-top:6px}
+  </style>
+</head>
+<body>
+  <h1>OpenClaw Kanban</h1>
+  <div class="toolbar">
+    <button id="newTask" class="btn">New task</button>
+    <button id="saveBtn" class="btn secondary">Save</button>
+    <span id="status" class="small">(unsaved changes: 0)</span>
+  </div>
+  <div class="board">
+    <div class="col" data-column="todo">
+      <h2>Not started</h2>
+      <div class="list" id="col-todo"></div>
+    </div>
+    <div class="col" data-column="inprogress">
+      <h2>In progress</h2>
+      <div class="list" id="col-inprogress"></div>
+    </div>
+    <div class="col" data-column="done">
+      <h2>Done</h2>
+      <div class="list" id="col-done"></div>
+    </div>
+  </div>
+
+  <!-- New task modal (simple) -->
+  <div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center">
+    <div style="background:#fff;padding:16px;border-radius:8px;min-width:320px;max-width:90%">
+      <h3>Create task</h3>
+      <input id="title" placeholder="Title" style="width:100%;padding:8px;margin-bottom:8px" />
+      <textarea id="desc" placeholder="Description (optional)" rows="4"></textarea>
+      <div style="text-align:right;margin-top:8px">
+        <button id="create" class="btn">Create</button>
+        <button id="cancel" class="btn secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Simple in-memory board backed by tasks.json (loaded/saved by user)
+    let tasks = [];
+    let dirty = 0;
+
+    const columns = { todo: document.getElementById('col-todo'), inprogress: document.getElementById('col-inprogress'), done: document.getElementById('col-done') };
+    const status = document.getElementById('status');
+
+    function render(){
+      Object.values(columns).forEach(c=>c.innerHTML='');
+      tasks.forEach(t=>{
+        const el = document.createElement('div');
+        el.className='task';
+        el.draggable = true;
+        el.dataset.id = t.id;
+        el.innerHTML = '<strong>'+escapeHtml(t.title)+'</strong><div class="meta">'+(t.desc?escapeHtml(t.desc):'')+'</div>';
+        el.addEventListener('dragstart', e=>{el.classList.add('dragging'); e.dataTransfer.setData('text/plain',t.id)});
+        el.addEventListener('dragend', e=>{el.classList.remove('dragging')});
+        el.addEventListener('dblclick', ()=>{openEdit(t.id)});
+        columns[t.column].appendChild(el);
+      });
+      status.textContent = `(unsaved changes: ${dirty})`;
+    }
+
+    function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
+
+    // Drag & drop on columns
+    Object.keys(columns).forEach(key=>{
+      const col = columns[key];
+      col.addEventListener('dragover', e=>{ e.preventDefault(); col.style.background='#f0f6ff'; });
+      col.addEventListener('dragleave', e=>{ col.style.background=''; });
+      col.addEventListener('drop', e=>{ e.preventDefault(); col.style.background=''; const id = e.dataTransfer.getData('text/plain'); moveTask(id,key); });
+    });
+
+    function moveTask(id, column){
+      const t = tasks.find(x=>x.id===id); if(!t) return; t.column = column; dirty++; render();
+    }
+
+    // New task flow
+    document.getElementById('newTask').addEventListener('click', ()=>{document.getElementById('modal').style.display='flex'});
+    document.getElementById('cancel').addEventListener('click', ()=>{document.getElementById('modal').style.display='none'});
+    document.getElementById('create').addEventListener('click', ()=>{
+      const title = document.getElementById('title').value.trim(); const desc = document.getElementById('desc').value.trim();
+      if(!title) return alert('Title required');
+      const id = 't_'+Date.now();
+      tasks.push({id,title,desc,column:'todo',created: new Date().toISOString()});
+      dirty++; document.getElementById('modal').style.display='none'; document.getElementById('title').value=''; document.getElementById('desc').value=''; render();
+    });
+
+    function openEdit(id){
+      const t = tasks.find(x=>x.id===id); if(!t) return; const newTitle = prompt('Title', t.title); if(newTitle===null) return; const newDesc = prompt('Description', t.desc||''); t.title = newTitle; t.desc = newDesc; dirty++; render();
+    }
+
+    // Save button will trigger download of tasks.json (user can push), or later we wire git pushes
+    document.getElementById('saveBtn').addEventListener('click', ()=>{
+      const data = JSON.stringify(tasks, null, 2);
+      const blob = new Blob([data], {type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'tasks.json'; a.click(); URL.revokeObjectURL(url);
+      dirty = 0; render();
+    });
+
+    // Load tasks.json if available via fetch (same origin)
+    fetch('tasks.json').then(r=>{ if(!r.ok) throw 0; return r.json() }).then(j=>{ tasks = j; render() }).catch(()=>{ tasks = []; render() });
+  </script>
+</body>
+</html>
