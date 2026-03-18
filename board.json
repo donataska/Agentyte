@@ -1,0 +1,14 @@
+{
+  "board_id":"kanban-main",
+  "columns":[
+    {"id":"backlog","title":"Backlog","order":0},
+    {"id":"not-started","title":"Not started","order":1},
+    {"id":"ready","title":"Ready","order":2},
+    {"id":"in-progress","title":"In progress","order":3},
+    {"id":"review","title":"Review / QA","order":4},
+    {"id":"blocked","title":"Blocked","order":5},
+    {"id":"done","title":"Done","order":6},
+    {"id":"archive","title":"Archive","order":7}
+  ],
+  "labels":["P0","P1","P2","research","writing","design","publish","facebook","linkedin","newsletter"]
+}
