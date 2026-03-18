@@ -7,7 +7,7 @@
   <style>
     body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;padding:16px;background:#f5f7fb}
     h1{margin:0 0 12px}
-    .board{display:flex;gap:12px}
+    .board{display:flex;gap:12px;align-items:flex-start}
     .col{background:#fff;border-radius:8px;padding:12px;flex:1;min-height:300px;box-shadow:0 1px 3px rgba(0,0,0,0.08)}
     .col h2{font-size:16px;margin:0 0 8px}
     .task{background:#f7f9fc;border-radius:6px;padding:8px;margin-bottom:8px;cursor:grab}
@@ -24,25 +24,11 @@
   <h1>OpenClaw Kanban</h1>
   <div class="toolbar">
     <button id="newTask" class="btn">New task</button>
-    <button id="saveBtn" class="btn secondary">Save</button>
+    <button id="saveBtn" class="btn secondary">Download tasks.json</button>
     <span id="status" class="small">(unsaved changes: 0)</span>
   </div>
-  <div class="board">
-    <div class="col" data-column="todo">
-      <h2>Not started</h2>
-      <div class="list" id="col-todo"></div>
-    </div>
-    <div class="col" data-column="inprogress">
-      <h2>In progress</h2>
-      <div class="list" id="col-inprogress"></div>
-    </div>
-    <div class="col" data-column="done">
-      <h2>Done</h2>
-      <div class="list" id="col-done"></div>
-    </div>
-  </div>
+  <div id="boardRoot" class="board"></div>
 
-  <!-- New task modal (simple) -->
   <div id="modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.4);align-items:center;justify-content:center">
     <div style="background:#fff;padding:16px;border-radius:8px;min-width:320px;max-width:90%">
       <h3>Create task</h3>
@@ -55,70 +41,72 @@
     </div>
   </div>
 
-  <script>
-    // Simple in-memory board backed by tasks.json (loaded/saved by user)
-    let tasks = [];
-    let dirty = 0;
+<script>
+(async function(){
+  let boardDef = {columns:[]};
+  try{ boardDef = await (await fetch('board.json')).json(); }catch(e){ console.warn('No board.json, using defaults'); boardDef = {columns:[{id:'not-started',title:'Not started'},{id:'in-progress',title:'In progress'},{id:'done',title:'Done'}]}; }
+  let tasks = [];
+  try{ tasks = await (await fetch('tasks.json')).json(); }catch(e){ tasks = []; }
 
-    const columns = { todo: document.getElementById('col-todo'), inprogress: document.getElementById('col-inprogress'), done: document.getElementById('col-done') };
-    const status = document.getElementById('status');
+  const boardRoot = document.getElementById('boardRoot');
+  const status = document.getElementById('status');
+  let dirty = 0;
 
-    function render(){
-      Object.values(columns).forEach(c=>c.innerHTML='');
-      tasks.forEach(t=>{
-        const el = document.createElement('div');
-        el.className='task';
-        el.draggable = true;
-        el.dataset.id = t.id;
-        el.innerHTML = '<strong>'+escapeHtml(t.title)+'</strong><div class="meta">'+(t.desc?escapeHtml(t.desc):'')+'</div>';
-        el.addEventListener('dragstart', e=>{el.classList.add('dragging'); e.dataTransfer.setData('text/plain',t.id)});
-        el.addEventListener('dragend', e=>{el.classList.remove('dragging')});
-        el.addEventListener('dblclick', ()=>{openEdit(t.id)});
-        columns[t.column].appendChild(el);
-      });
-      status.textContent = `(unsaved changes: ${dirty})`;
-    }
+  // build columns
+  const columns = {};
+  boardDef.columns.sort((a,b)=>a.order - b.order).forEach(col=>{
+    const el = document.createElement('div'); el.className='col'; el.dataset.column = col.id;
+    const h = document.createElement('h2'); h.textContent = col.title; el.appendChild(h);
+    const list = document.createElement('div'); list.className='list'; list.id = 'col-'+col.id; el.appendChild(list);
+    boardRoot.appendChild(el); columns[col.id] = list;
+  });
 
-    function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
-
-    // Drag & drop on columns
-    Object.keys(columns).forEach(key=>{
-      const col = columns[key];
-      col.addEventListener('dragover', e=>{ e.preventDefault(); col.style.background='#f0f6ff'; });
-      col.addEventListener('dragleave', e=>{ col.style.background=''; });
-      col.addEventListener('drop', e=>{ e.preventDefault(); col.style.background=''; const id = e.dataTransfer.getData('text/plain'); moveTask(id,key); });
+  function render(){
+    Object.values(columns).forEach(c=>c.innerHTML='');
+    tasks.forEach(t=>{
+      const col = columns[t.column] || columns[boardDef.columns[0].id];
+      const el = document.createElement('div'); el.className='task'; el.draggable = true; el.dataset.id = t.id;
+      el.innerHTML = '<strong>'+escapeHtml(t.title)+'</strong><div class="meta">'+(t.desc?escapeHtml(t.desc):'')+'</div>';
+      el.addEventListener('dragstart', e=>{el.classList.add('dragging'); e.dataTransfer.setData('text/plain',t.id)});
+      el.addEventListener('dragend', e=>{el.classList.remove('dragging')});
+      el.addEventListener('dblclick', ()=>openEdit(t.id));
+      col.appendChild(el);
     });
+    status.textContent = `(unsaved changes: ${dirty})`;
+  }
+  function escapeHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') }
 
-    function moveTask(id, column){
-      const t = tasks.find(x=>x.id===id); if(!t) return; t.column = column; dirty++; render();
-    }
+  // drag & drop
+  Object.keys(columns).forEach(key=>{
+    const col = columns[key];
+    col.parentElement.addEventListener('dragover', e=>{ e.preventDefault(); col.parentElement.style.background='#f0f6ff'; });
+    col.parentElement.addEventListener('dragleave', e=>{ col.parentElement.style.background=''; });
+    col.parentElement.addEventListener('drop', e=>{ e.preventDefault(); col.parentElement.style.background=''; const id = e.dataTransfer.getData('text/plain'); moveTask(id,key); });
+  });
+  function moveTask(id,column){ const t = tasks.find(x=>x.id===id); if(!t) return; t.column = column; dirty++; render(); }
 
-    // New task flow
-    document.getElementById('newTask').addEventListener('click', ()=>{document.getElementById('modal').style.display='flex'});
-    document.getElementById('cancel').addEventListener('click', ()=>{document.getElementById('modal').style.display='none'});
-    document.getElementById('create').addEventListener('click', ()=>{
-      const title = document.getElementById('title').value.trim(); const desc = document.getElementById('desc').value.trim();
-      if(!title) return alert('Title required');
-      const id = 't_'+Date.now();
-      tasks.push({id,title,desc,column:'todo',created: new Date().toISOString()});
-      dirty++; document.getElementById('modal').style.display='none'; document.getElementById('title').value=''; document.getElementById('desc').value=''; render();
-    });
+  // new task UI
+  document.getElementById('newTask').addEventListener('click', ()=>{document.getElementById('modal').style.display='flex'});
+  document.getElementById('cancel').addEventListener('click', ()=>{document.getElementById('modal').style.display='none'});
+  document.getElementById('create').addEventListener('click', ()=>{
+    const title = document.getElementById('title').value.trim(); const desc = document.getElementById('desc').value.trim();
+    if(!title) return alert('Title required');
+    const id = 't_'+Date.now();
+    tasks.push({id,title,desc,column:boardDef.columns[0].id,created:new Date().toISOString()});
+    dirty++; document.getElementById('modal').style.display='none'; document.getElementById('title').value=''; document.getElementById('desc').value=''; render();
+  });
+  function openEdit(id){ const t = tasks.find(x=>x.id===id); if(!t) return; const newTitle = prompt('Title', t.title); if(newTitle===null) return; const newDesc = prompt('Description', t.desc||''); t.title = newTitle; t.desc = newDesc; dirty++; render(); }
 
-    function openEdit(id){
-      const t = tasks.find(x=>x.id===id); if(!t) return; const newTitle = prompt('Title', t.title); if(newTitle===null) return; const newDesc = prompt('Description', t.desc||''); t.title = newTitle; t.desc = newDesc; dirty++; render();
-    }
+  document.getElementById('saveBtn').addEventListener('click', ()=>{
+    const data = JSON.stringify(tasks, null, 2);
+    const blob = new Blob([data], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = 'tasks.json'; a.click(); URL.revokeObjectURL(url);
+    dirty = 0; render();
+  });
 
-    // Save button will trigger download of tasks.json (user can push), or later we wire git pushes
-    document.getElementById('saveBtn').addEventListener('click', ()=>{
-      const data = JSON.stringify(tasks, null, 2);
-      const blob = new Blob([data], {type:'application/json'});
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'tasks.json'; a.click(); URL.revokeObjectURL(url);
-      dirty = 0; render();
-    });
-
-    // Load tasks.json if available via fetch (same origin)
-    fetch('tasks.json').then(r=>{ if(!r.ok) throw 0; return r.json() }).then(j=>{ tasks = j; render() }).catch(()=>{ tasks = []; render() });
-  </script>
+  render();
+})();
+</script>
 </body>
 </html>
